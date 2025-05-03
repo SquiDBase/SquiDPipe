@@ -186,5 +186,9 @@ The full CSV format includes additional metadata. To use this option, the `csvMe
 
 ## Citation  
 
-A publication is currently in preparation. In the meantime, please cite the SquiDBase [poster presentation](https://f1000research.com/posters/13-1157).
+Our publication is currently under review. In the meantime, please cite the SquiDBase [Pre-print](https://doi.org/10.1101/2025.04.28.650941).
+
+SquiDBase: a community resource of raw nanopore data from microbes
+Wim L. Cuypers, Halil Ceylan, Eline Turcksin, Laura Raes, Nicky de Vrij, Johan Michiels, Sandra Coppens, Tessa de Block, Daan Jansen, Kevin K. Arien, Philippe Selhorst, Koen Vercauteren, Julia M. Gauglitz, Wout Bittremieux, Kris Laukens
+bioRxiv 2025.04.28.650941; doi: https://doi.org/10.1101/2025.04.28.650941
 
