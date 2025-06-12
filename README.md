@@ -33,7 +33,7 @@ SquiDpipe is specifically designed for microbial and viral sequencing applicatio
 
 2. Clone this repository:
 ```bash
-git clone https://github.com/Cuypers-Wim/squidpipe.git
+git clone https://github.com/SquiDBase/SquiDPipe.git
 cd squidpipe
 ```
 
