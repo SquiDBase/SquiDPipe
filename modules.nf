@@ -20,6 +20,31 @@ process CONCATENATE_FASTQ {
     """
 }
 
+process EXTRACT_READIDS_FROM_FASTQ {
+    label 'process_low'
+    conda params.conda_envs.default_env
+    
+    input:
+    tuple path(reads_combined), val(meta)
+    
+    output:
+    tuple path("${meta.folder}_readids.txt"), val(meta), emit: tuple_ids_meta
+    
+    script:
+    """
+    # Extract read IDs from FASTQ file
+    # Remove the '@' symbol and take only the read ID (before first space)
+    seqkit seq -n ${reads_combined} | sed 's/^@//' | cut -d' ' -f1 > ${meta.folder}_readids.txt
+    """
+    
+    stub:
+    """
+    touch ${meta.folder}_readids.txt
+    """
+}
+
+
+
 /*
  * Run Kraken2 on fastq files within barcode files
  */
@@ -221,7 +246,7 @@ process MAPPING_STATS_ALL {
 /*
  * Extract reads that map to the species of interest
  */
- 
+
 process EXTRACT_READIDS {
     
     label 'process_low'

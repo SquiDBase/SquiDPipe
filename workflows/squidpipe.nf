@@ -23,6 +23,7 @@ nextflow.enable.dsl=2
 
 // include 
 include { CONCATENATE_FASTQ                                                 } from '../modules.nf'
+include { EXTRACT_READIDS_FROM_FASTQ                                        } from '../modules.nf'
 include { RUNKRAKEN2                                                        } from '../modules.nf'
 include { SUBSET_FASTQ                                                      } from '../modules.nf'
 include { RETRIEVE_GENOMEREFS                                               } from '../modules.nf'
@@ -76,73 +77,103 @@ workflow SQUIDPIPE {
 
     concatenate_fastq_results = CONCATENATE_FASTQ(params.fastq_dir, ch_csv_lines)
     
-    // KrakenDB needs to be provided via a channel to ensure container support
-    // ch_krakenDB = channel.fromPath(params.databases.kraken_db)
+    // Branch workflow based on execution mode
 
-    kraken_results = RUNKRAKEN2(concatenate_fastq_results, params.databases.kraken_db)
 
-    fastq_subset_results = SUBSET_FASTQ(kraken_results.reads_ids_meta)
-    // subset fastq emits a tuple of subsetted reads, and virus ids
+    if (params.execution_mode == 'pure_isolate') {
+        // PURE ISOLATE MODE: Skip most steps, directly extract read IDs from FASTQ
+        
+        // Extract read IDs directly from concatenated FASTQ files
+        readids_from_fastq = EXTRACT_READIDS_FROM_FASTQ(concatenate_fastq_results)
+        
+        // If POD5 splitting is enabled, subset POD5 files using extracted read IDs
+        if (params.pod5_split) {
+            split_pod5_results = SUBSET_POD5(params.pod5_dir, readids_from_fastq)
+            
+            // Generate final metadata CSV
+            split_pod5_results
+                .map { file, meta -> 
+                    def headers = "filename," + meta.keySet().drop(1).join(",")
+                    def values = "${file.getName()}," + meta.values().drop(1).join(",")
+                    return [headers, values]
+                }
+                .flatten()
+                .unique()
+                .collectFile(name: 'final_metadata.csv', newLine: true, storeDir: 'results/', sort: false)
+        }
+        
+    } else {
+        
+        // FULL OR MAPPING_ONLY MODES: Original pipeline logic
 
-    // retrieve genome references
+        // KrakenDB needs to be provided via a channel to ensure container support
+        // ch_krakenDB = channel.fromPath(params.databases.kraken_db)
+
+        kraken_results = RUNKRAKEN2(concatenate_fastq_results, params.databases.kraken_db)
+
+        fastq_subset_results = SUBSET_FASTQ(kraken_results.reads_ids_meta)
+        // subset fastq emits a tuple of subsetted reads, and virus ids
+
+        // retrieve genome references
     
-    ch_retrieved_refs = RETRIEVE_GENOMEREFS(fastq_subset_results)
+        ch_retrieved_refs = RETRIEVE_GENOMEREFS(fastq_subset_results)
 
-    // Split the results into two channels: fna_files and fastq_meta
+        // Split the results into two channels: fna_files and fastq_meta
 
-    ch_mapping_input = ch_retrieved_refs.multiMap{ it ->
-        fna_files: it[1]
-        reads_meta: it[0, 2]
+        ch_mapping_input = ch_retrieved_refs.multiMap{ it ->
+            fna_files: it[1]
+            reads_meta: it[0, 2]
+        }
+
+        // combine all downloaded fna files with the user-provided fna file (typically the "decoy" fasta(s) to avoid false-positives)
+        ch_extraRef = channel.fromPath(params.references)
+
+        ch_all_refs = ch_mapping_input.fna_files.concat(ch_extraRef)
+    
+        ch_refGenome = ch_all_refs.collectFile(name: 'combined_reference.fna')
+
+        // deduplicate and  to a value channel convert ch_refGenome to a value channel
+
+        ch_refGenome_value = DEDUPLICATE_REFERENCE(ch_refGenome).first()
+
+        // map reads per sample to the conbined reference
+
+        mapping_output = MAP_READS(ch_mapping_input.reads_meta, ch_refGenome_value)
+
+        bamProcessing_output = BAM_PROCESSING(mapping_output)
+
+        // todo, how to get correct read ids? 
+        // todo, how to get mapsats per correct reference?
+        // todo - compare to kraken2 outputs
+    
+        // extracts the readids of those reads that map to the correct reference genome
+    
+        mapping_stats_output = MAPPING_STATS_ALL(bamProcessing_output)
+
+        extract_readids_output = EXTRACT_READIDS(mapping_stats_output.tuple_bam_meta)
+
+        // we need only the filtered bam and meta
+
+        samtools_depth_output = SAMTOOLS_DEPTH(extract_readids_output.tuple_bam_meta)
+
+        ch_depthFiles = samtools_depth_output.map{ it -> it[0] }
+        ch_concat_deptFile = ch_depthFiles.collectFile(name: 'combined.depth')
+    
+        depth_of_coverage_output = DEPTH_OF_COVERAGE(ch_concat_deptFile)
+
+        if (params.pod5_split) {
+        split_pod5_results = SUBSET_POD5(params.pod5_dir, extract_readids_output.tuple_ids_meta)
+        split_pod5_results
+        .map { file, meta -> 
+            def headers = "filename," + meta.keySet().drop(1).join(",")  // Add "filename" as the first header
+            def values = "${file.getName()}," + meta.values().drop(1).join(",")
+            return [headers, values]
+        }
+        .flatten()
+        .unique()
+        .collectFile(name: 'final_metadata.csv', newLine: true, storeDir: 'results/', sort: false)
+
+        }
+
     }
-
-    // combine all downloaded fna files with the user-provided fna file (typically the "decoy" fasta(s) to avoid false-positives)
-    ch_extraRef = channel.fromPath(params.references)
-
-    ch_all_refs = ch_mapping_input.fna_files.concat(ch_extraRef)
-    
-    ch_refGenome = ch_all_refs.collectFile(name: 'combined_reference.fna')
-
-    // deduplicate and  to a value channel convert ch_refGenome to a value channel
-
-    ch_refGenome_value = DEDUPLICATE_REFERENCE(ch_refGenome).first()
-
-    // map reads per sample to the conbined reference
-
-    mapping_output = MAP_READS(ch_mapping_input.reads_meta, ch_refGenome_value)
-
-    bamProcessing_output = BAM_PROCESSING(mapping_output)
-
-    // todo, how to get correct read ids? 
-    // todo, how to get mapsats per correct reference?
-    // todo - compare to kraken2 outputs
-    
-    // extracts the readids of those reads that map to the correct reference genome
-    
-    mapping_stats_output = MAPPING_STATS_ALL(bamProcessing_output)
-
-    extract_readids_output = EXTRACT_READIDS(mapping_stats_output.tuple_bam_meta)
-
-    // we need only the filtered bam and meta
-
-    samtools_depth_output = SAMTOOLS_DEPTH(extract_readids_output.tuple_bam_meta)
-
-    ch_depthFiles = samtools_depth_output.map{ it -> it[0] }
-    ch_concat_deptFile = ch_depthFiles.collectFile(name: 'combined.depth')
-    
-    depth_of_coverage_output = DEPTH_OF_COVERAGE(ch_concat_deptFile)
-
-    if (params.pod5_split) {
-    split_pod5_results = SUBSET_POD5(params.pod5_dir, extract_readids_output.tuple_ids_meta)
-    split_pod5_results
-    .map { file, meta -> 
-        def headers = "filename," + meta.keySet().drop(1).join(",")  // Add "filename" as the first header
-        def values = "${file.getName()}," + meta.values().drop(1).join(",")
-        return [headers, values]
-    }
-    .flatten()
-    .unique()
-    .collectFile(name: 'final_metadata.csv', newLine: true, storeDir: 'results/', sort: false)
-
-    }
-
 }
